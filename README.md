@@ -1,25 +1,46 @@
-# LPR Halytys Bot
+# Suomi Halytys Bot
 
-A Telegram bot that monitors Finnish emergency alert websites and sends real-time notifications for Lappeenranta.
+A Telegram bot that monitors Finnish emergency alert websites and sends real-time notifications — for any city in Finland.
+
+Users can subscribe personally or connect a Telegram channel to a specific city.
 
 ## Features
 
-- Scrapes multiple sources with automatic fallback if the primary source is unavailable
-- Deduplicates events across sources and across check cycles
+- Any Finnish city supported — powered by tilannehuone.fi
+- Personal subscriptions via DM or channel subscriptions via `/setchannel`
+- Automatic fallback between sources if the primary is unavailable
+- Fetches human-written descriptions and addresses from event detail pages
 - Emoji-coded alert types for quick visual recognition
-- Includes a link to the detail page when available
+- Deduplicates events across sources and check cycles
 - Retains event history for 7 days, auto-purges older records
-- Respects Telegram rate limits with automatic retry on flood control
+- Unreachable subscribers (blocked/deactivated) are removed automatically
+
+## Commands
+
+| Command | Where | Description |
+|---|---|---|
+| `/start` | DM | Introduction and usage instructions |
+| `/setcity Tampere` | DM | Subscribe to alerts for a city |
+| `/mycity` | DM | Show your current city |
+| `/stop` | DM | Unsubscribe |
+| `/setchannel Tampere` | In channel | Register the channel to receive alerts for a city |
+
+### How to set up a channel
+
+1. Create a Telegram channel
+2. Add the bot as admin with **Post Messages** permission
+3. Post `/setchannel YourCity` in the channel
+4. Done — the bot will send all new alerts for that city to the channel
 
 ## Alert sources (fallback order)
 
 | Source | Notes |
 |---|---|
-| [tilannehuone.fi](https://www.tilannehuone.fi/kysely.php?paikkakunta=Lappeenranta&vrk=on) | Primary — reliable times, detail page links |
-| [paloasema.fi](https://www.paloasema.fi/lappeenranta) | First fallback |
-| [hälytyslista.fi](https://xn--hlytyslista-l8a.fi/halytykset/lappeenranta) | Second fallback |
+| [tilannehuone.fi](https://www.tilannehuone.fi) | Primary — reliable times, detail page links, all cities |
+| [paloasema.fi](https://www.paloasema.fi) | First fallback |
+| [hälytyslista.fi](https://xn--hlytyslista-l8a.fi) | Second fallback |
 
-The bot uses the first source that returns results. If tilannehuone.fi is up, the other sources are never queried.
+The bot queries the primary source first. If it returns no results, the next source is tried. Only one source is used per cycle.
 
 ## Emoji reference
 
@@ -40,12 +61,9 @@ The bot uses the first source that returns results. If tilannehuone.fi is up, th
 
 ## Setup
 
-### 1. Create a Telegram bot and channel
+### 1. Create a Telegram bot
 
-1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token
-2. Create a Telegram channel (public or private)
-3. Add the bot as an admin with **Post Messages** permission
-4. Get the channel ID: forward any message from the channel to [@userinfobot](https://t.me/userinfobot)
+Create a bot via [@BotFather](https://t.me/BotFather) and copy the token.
 
 ### 2. Configure environment
 
@@ -57,8 +75,12 @@ Edit `.env`:
 
 ```env
 BOT_TOKEN=your_telegram_bot_token
-CHAT_ID=@yourchannel        # or numeric ID like -1001234567890
-CHECK_INTERVAL=5            # minutes between checks
+
+# Optional: auto-register a legacy channel on first start
+CHAT_ID=@yourchannel
+DEFAULT_CITY=Lappeenranta
+
+CHECK_INTERVAL=5
 ```
 
 ### 3. Run with Docker
@@ -82,14 +104,15 @@ git pull
 docker compose up -d --build
 ```
 
-The database is preserved; the bot will silently catch up with current events on startup and only send new ones going forward.
+The database is preserved. The bot silently catches up with current events on startup and only sends new ones going forward.
 
 ## Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `BOT_TOKEN` | — | Telegram bot token (required) |
-| `CHAT_ID` | — | Target channel/chat ID (required) |
-| `CHECK_INTERVAL` | `5` | Check interval in minutes |
+| `CHAT_ID` | — | Legacy channel: auto-registered on first start |
+| `DEFAULT_CITY` | `Lappeenranta` | City used for the legacy `CHAT_ID` |
+| `CHECK_INTERVAL` | `5` | Minutes between checks |
 | `DB_PATH` | `alerts.db` | SQLite database path |
-| `SILENT_FIRST_RUN` | `true` | If `false`, sends last 24 h of events on startup (useful for testing) |
+| `SILENT_FIRST_RUN` | `true` | Set to `false` to send last 24 h of events on startup (testing) |
