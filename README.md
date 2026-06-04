@@ -54,11 +54,14 @@ Users subscribe personally via DM or connect a Telegram channel to one or more c
 
 | Source | Notes |
 |---|---|
-| 1️⃣ [tilannehuone.fi](https://www.tilannehuone.fi) | Primary — reliable times, detail page links |
-| 2️⃣ [paloasema.fi](https://www.paloasema.fi) | First fallback |
-| 3️⃣ [hälytyslista.fi](https://xn--hlytyslista-l8a.fi) | Second fallback |
+| 1️⃣ [peto-media.fi](https://www.peto-media.fi) | Primary — **official** Finnish Rescue Services RSS feed |
+| 2️⃣ [tilannehuone.fi](https://www.tilannehuone.fi) | First fallback — provides event detail page links |
+| 3️⃣ [paloasema.fi](https://www.paloasema.fi) | Second fallback |
+| 4️⃣ [hälytyslista.fi](https://xn--hlytyslista-l8a.fi) | Third fallback |
 
 Each cycle the primary source is tried first. The next source is used only if the previous returns no results.
+
+All aggregator sites ultimately pull from the same official Pelastustoimen mediapalvelu feed — the bot goes straight to the source.
 
 ## Emoji reference
 
