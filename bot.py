@@ -16,6 +16,7 @@ import storage
 from emojis import get_emoji
 from scrapers import SCRAPER_FALLBACK_CHAIN
 from scrapers.base import Alert
+from scrapers.tilannehuone_fi import fetch_description
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -161,6 +162,16 @@ async def check_and_notify(bot: Bot, silent: bool = False, max_age_h: int | None
             source=alert.source,
             raw_text=alert.raw_text,
         )
+
+        # Fetch detail page description (address/notes) for tilannehuone events
+        if alert.url and alert.source == "tilannehuone.fi" and not alert.description:
+            desc = await asyncio.get_event_loop().run_in_executor(
+                None, fetch_description, alert.url
+            )
+            if desc:
+                alert.description = desc
+                # Update the stored description too
+                storage.update_description(alert_id, desc)
 
         if silent:
             continue

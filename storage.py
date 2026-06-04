@@ -53,6 +53,12 @@ def save(alert_id: str, event_time: str, alert_type: str,
         db.commit()
 
 
+def update_description(alert_id: str, description: str) -> None:
+    with _conn() as db:
+        db.execute("UPDATE alerts SET description=? WHERE id=?", (description, alert_id))
+        db.commit()
+
+
 def purge_old() -> int:
     cutoff = (datetime.utcnow() - timedelta(days=RETENTION_DAYS)).isoformat()
     with _conn() as db:

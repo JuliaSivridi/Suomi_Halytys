@@ -1,8 +1,13 @@
 """Scraper for tilannehuone.fi/kysely.php?paikkakunta=Lappeenranta&vrk=on
 
-Actual table structure (verified via browser):
+Main listing table structure (verified via browser):
   row: [ <td/> | <td>Lappeenranta</td> | <td>04.06.2026 10:37:13</td> | <td>savuhavainto</td> | <td/> ]
   optional next row: [ <td colspan> Yksiköt: Willimies <a href="tehtava.php?hash=...">Avaa tehtäväsivu</a> ]
+
+Detail page (tehtava.php?hash=...) may contain a human-written description
+with street address, e.g.:
+  "Savut tulleet omakotitaloon sisälle, ei rakennuspaloa Tampereentiellä."
+We fetch it once per new event that has a URL.
 """
 import logging
 import re
@@ -16,6 +21,7 @@ BASE = "https://www.tilannehuone.fi/"
 SOURCE = "tilannehuone.fi"
 
 _DATE_TIME_RE = re.compile(r"(\d{2}\.\d{2}\.\d{4})\s+(\d{2}:\d{2})")
+_EXTRA = {"Referer": "https://www.tilannehuone.fi/"}
 
 
 def _resolve(href: str) -> str:
@@ -25,18 +31,62 @@ def _resolve(href: str) -> str:
 def _find_result_table(soup: BeautifulSoup) -> Tag | None:
     """Find the table that contains Lappeenranta alert rows."""
     for tbl in soup.find_all("table"):
-        rows = tbl.find_all("tr")
-        for row in rows:
+        for row in tbl.find_all("tr"):
             cells = row.find_all("td")
-            if len(cells) >= 4:
-                # Cell[2] should contain combined datetime "DD.MM.YYYY HH:MM:SS"
-                if _DATE_TIME_RE.search(cells[2].get_text()):
-                    return tbl
+            if len(cells) >= 4 and _DATE_TIME_RE.search(cells[2].get_text()):
+                return tbl
     return None
 
 
+def fetch_description(detail_url: str) -> str:
+    """Fetch the event detail page and return the human-written description, if any.
+
+    The description lives in the main event table, after the two headings
+    (city name and alert type). It often contains a street address.
+    Returns empty string if not found or if the page says location not specified.
+    """
+    resp = get(detail_url, extra_headers=_EXTRA)
+    if not resp:
+        return ""
+
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    # Find the table that has a heading matching the alert type pattern
+    for tbl in soup.find_all("table"):
+        headings = tbl.find_all(["h1", "h2", "h3"])
+        if len(headings) < 2:
+            continue
+
+        # Collect all text nodes in the table that are NOT:
+        # - a heading, - a timestamp, - "Lisätty:", - share/social links
+        candidates = []
+        for td in tbl.find_all("td"):
+            # Skip cells that only contain headings or timestamps
+            if td.find(["h1", "h2", "h3"]):
+                continue
+            text = clean(td.get_text(" ", strip=True))
+            if not text:
+                continue
+            if re.match(r"^\d{2}\.\d{2}\.\d{4}", text):
+                continue
+            if text.lower().startswith("lisätty"):
+                continue
+            if "sijaintia ei ole tarkennettu" in text.lower():
+                continue
+            if len(text) > 10 and re.search(r"\w{3,}", text):
+                # Remove the "Lisätty: ..." trailer if present
+                text = re.sub(r"\s*Lisätty:.*$", "", text, flags=re.IGNORECASE).strip()
+                if text:
+                    candidates.append(text)
+
+        if candidates:
+            return candidates[0]
+
+    return ""
+
+
 def scrape() -> list[Alert]:
-    resp = get(URL, extra_headers={"Referer": "https://www.tilannehuone.fi/"})
+    resp = get(URL, extra_headers=_EXTRA)
     if not resp:
         return []
 
@@ -48,7 +98,6 @@ def scrape() -> list[Alert]:
         return []
 
     alerts: list[Alert] = []
-    pending_url = ""  # link found in "Yksiköt" continuation row
 
     for row in result_table.find_all("tr"):
         cells = row.find_all("td")
@@ -57,11 +106,9 @@ def scrape() -> list[Alert]:
         if cells and "yksiköt" in cells[0].get_text().lower():
             for a in row.find_all("a", href=True):
                 if "tehtava.php" in a["href"]:
-                    pending_url = _resolve(a["href"])
+                    if alerts:
+                        alerts[-1].url = _resolve(a["href"])
                     break
-            if alerts:
-                alerts[-1].url = pending_url
-            pending_url = ""
             continue
 
         if len(cells) < 4:
@@ -77,7 +124,6 @@ def scrape() -> list[Alert]:
             continue
 
         date_str, time_str = m.group(1), m.group(2)
-        # Parse "DD.MM.YYYY" → "YYYY-MM-DD"
         d, mo, y = date_str.split(".")
         event_time = f"{y}-{mo}-{d} {time_str}"
 
@@ -85,7 +131,7 @@ def scrape() -> list[Alert]:
         if not alert_type:
             continue
 
-        # Check for inline link in this row
+        # Inline link (rare on listing page)
         detail_url = ""
         for a in row.find_all("a", href=True):
             if "tehtava.php" in a["href"]:
