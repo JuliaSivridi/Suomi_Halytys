@@ -83,7 +83,7 @@ def _format_message(alert: Alert) -> str:
         time_str = dt.strftime("%d.%m.%Y %H:%M")
     except ValueError:
         time_str = alert.event_time
-    lines = [f"{emoji} <b>{title}</b>", f"🕐 {time_str}"]
+    lines = [f"{emoji} <b>{title}</b>", f"📍 {alert.location}", f"🕐 {time_str}"]
     if alert.url:
         lines.append(f'🔗 <a href="{alert.url}">Lisätiedot</a>')
     return "\n".join(lines)
