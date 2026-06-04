@@ -1,5 +1,12 @@
 # Suomi Halytys Bot
 
+[![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/SuomiHalytysBot)
+
+![Python](https://img.shields.io/badge/Python_3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![python-telegram-bot](https://img.shields.io/badge/python--telegram--bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)
+![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)
+
 A Telegram bot that monitors Finnish emergency alert websites and sends real-time notifications for any city in Finland.
 
 Users subscribe personally via DM or connect a Telegram channel to one or more cities.
@@ -47,9 +54,9 @@ Users subscribe personally via DM or connect a Telegram channel to one or more c
 
 | Source | Notes |
 |---|---|
-| [tilannehuone.fi](https://www.tilannehuone.fi) | Primary — reliable times, detail page links |
-| [paloasema.fi](https://www.paloasema.fi) | First fallback |
-| [hälytyslista.fi](https://xn--hlytyslista-l8a.fi) | Second fallback |
+| 1️⃣ [tilannehuone.fi](https://www.tilannehuone.fi) | Primary — reliable times, detail page links |
+| 2️⃣ [paloasema.fi](https://www.paloasema.fi) | First fallback |
+| 3️⃣ [hälytyslista.fi](https://xn--hlytyslista-l8a.fi) | Second fallback |
 
 Each cycle the primary source is tried first. The next source is used only if the previous returns no results.
 
