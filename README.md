@@ -13,10 +13,10 @@ Users subscribe personally via DM or connect a Telegram channel to one or more c
 
 ## Features
 
-- Any Finnish city supported — powered by tilannehuone.fi
+- Any Finnish city supported — powered by the official Pelastustoimen mediapalvelu (peto-media.fi)
 - Multiple cities per subscriber or channel
 - Personal subscriptions via DM, channel subscriptions via `/setchannel`
-- Automatic source fallback if the primary is unavailable
+- Automatic source fallback across 4 data sources if the primary is unavailable
 - Fetches human-written descriptions and addresses from event detail pages
 - Emoji-coded alert types for quick visual recognition
 - Deduplicates events across sources and check cycles
