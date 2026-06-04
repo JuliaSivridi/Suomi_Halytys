@@ -1,6 +1,6 @@
 # Suomi Halytys Bot
 
-[![Telegram Bot](https://img.shields.io/badge/Telegram-Bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/SuomiHalytysBot)
+[![@Suomi_Halytys_bot](https://img.shields.io/badge/@Suomi__Halytys__bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/Suomi_Halytys_bot)
 
 ![Python](https://img.shields.io/badge/Python_3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![python-telegram-bot](https://img.shields.io/badge/python--telegram--bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)
