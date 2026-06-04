@@ -1,46 +1,57 @@
 # Suomi Halytys Bot
 
-A Telegram bot that monitors Finnish emergency alert websites and sends real-time notifications — for any city in Finland.
+A Telegram bot that monitors Finnish emergency alert websites and sends real-time notifications for any city in Finland.
 
-Users can subscribe personally or connect a Telegram channel to a specific city.
+Users subscribe personally via DM or connect a Telegram channel to one or more cities.
 
 ## Features
 
 - Any Finnish city supported — powered by tilannehuone.fi
-- Personal subscriptions via DM or channel subscriptions via `/setchannel`
-- Automatic fallback between sources if the primary is unavailable
+- Multiple cities per subscriber or channel
+- Personal subscriptions via DM, channel subscriptions via `/setchannel`
+- Automatic source fallback if the primary is unavailable
 - Fetches human-written descriptions and addresses from event detail pages
 - Emoji-coded alert types for quick visual recognition
 - Deduplicates events across sources and check cycles
 - Retains event history for 7 days, auto-purges older records
-- Unreachable subscribers (blocked/deactivated) are removed automatically
+- Unreachable subscribers are removed automatically
 
 ## Commands
 
-| Command | Where | Description |
-|---|---|---|
-| `/start` | DM | Introduction and usage instructions |
-| `/setcity Tampere` | DM | Subscribe to alerts for a city |
-| `/mycity` | DM | Show your current city |
-| `/stop` | DM | Unsubscribe |
-| `/setchannel Tampere` | In channel | Register the channel to receive alerts for a city |
+### Personal (DM)
+
+| Command | Description |
+|---|---|
+| `/start` | Introduction and usage |
+| `/setcity Tampere` | Subscribe to alerts for a city (additive) |
+| `/removecity Tampere` | Remove one city from subscription |
+| `/mycities` | List your current subscriptions |
+| `/stop` | Cancel all subscriptions |
+
+### Channel (post inside the channel)
+
+| Command | Description |
+|---|---|
+| `/setchannel Tampere` | Add a city to the channel |
+| `/removechannel Tampere` | Remove a city from the channel |
+| `/channelcities` | List all cities registered for the channel |
 
 ### How to set up a channel
 
 1. Create a Telegram channel
 2. Add the bot as admin with **Post Messages** permission
-3. Post `/setchannel YourCity` in the channel
-4. Done — the bot will send all new alerts for that city to the channel
+3. Post `/setchannel YourCity` in the channel — repeat for each city
+4. Done
 
 ## Alert sources (fallback order)
 
 | Source | Notes |
 |---|---|
-| [tilannehuone.fi](https://www.tilannehuone.fi) | Primary — reliable times, detail page links, all cities |
+| [tilannehuone.fi](https://www.tilannehuone.fi) | Primary — reliable times, detail page links |
 | [paloasema.fi](https://www.paloasema.fi) | First fallback |
 | [hälytyslista.fi](https://xn--hlytyslista-l8a.fi) | Second fallback |
 
-The bot queries the primary source first. If it returns no results, the next source is tried. Only one source is used per cycle.
+Each cycle the primary source is tried first. The next source is used only if the previous returns no results.
 
 ## Emoji reference
 
@@ -63,7 +74,17 @@ The bot queries the primary source first. If it returns no results, the next sou
 
 ### 1. Create a Telegram bot
 
-Create a bot via [@BotFather](https://t.me/BotFather) and copy the token.
+Create a bot via [@BotFather](https://t.me/BotFather), copy the token, and set the commands:
+
+```
+setcity - Tilaa kaupunki (esim. /setcity Tampere)
+removecity - Poista kaupunki tilauksesta
+mycities - Näytä omat tilaukset
+stop - Peruuta kaikki tilaukset
+setchannel - Lisää kaupunki kanavalle (käytä kanavassa)
+removechannel - Poista kaupunki kanavalta (käytä kanavassa)
+channelcities - Näytä kanavan kaupungit (käytä kanavassa)
+```
 
 ### 2. Configure environment
 
@@ -84,13 +105,13 @@ CHECK_INTERVAL=5
 docker compose up -d
 ```
 
-Logs:
+View logs:
 
 ```bash
 docker compose logs -f
 ```
 
-The `data/` directory is mounted as a volume — the SQLite database persists across container restarts and rebuilds.
+The `data/` directory is mounted as a volume — the SQLite database persists across restarts and rebuilds.
 
 ## Updating
 
@@ -99,7 +120,7 @@ git pull
 docker compose up -d --build
 ```
 
-The database is preserved. The bot silently catches up with current events on startup and only sends new ones going forward.
+The database is preserved and auto-migrated on startup.
 
 ## Environment variables
 
