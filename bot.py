@@ -194,11 +194,16 @@ async def check_and_notify(bot: Bot, silent: bool = False,
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "🚒 <b>Halytys-botti</b>\n\n"
-        "Lähetän hälytykset haluamaltasi paikkakunnalta.\n\n"
-        "Aseta kaupunkisi:\n"
-        "<code>/setcity Lappeenranta</code>\n\n"
-        "Lopeta tilaus:\n"
-        "<code>/stop</code>",
+        "Lähetän pelastustoimen hälytykset haluamaltasi paikkakunnalta.\n\n"
+        "<b>Komennot:</b>\n"
+        "/setcity <i>Kaupunki</i> — tilaa kaupunki\n"
+        "/removecity <i>Kaupunki</i> — poista kaupunki\n"
+        "/mycities — näytä tilauksesi\n"
+        "/stop — peruuta kaikki tilaukset\n\n"
+        "<b>Kanavan ylläpitäjille:</b>\n"
+        "/setchannel <i>Kaupunki</i> — lisää kaupunki kanavalle\n"
+        "/removechannel <i>Kaupunki</i> — poista kaupunki kanavalta\n"
+        "/channelcities — näytä kanavan kaupungit",
         parse_mode="HTML",
     )
 
@@ -213,17 +218,56 @@ async def cmd_setcity(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     city = " ".join(ctx.args).strip().capitalize()
     chat_id = update.effective_chat.id
     storage.subscribe(chat_id, city, kind="personal")
+    cities = storage.get_cities(chat_id)
     await update.message.reply_text(
-        f"✅ Tilaus asetettu: <b>{city}</b>\n"
-        "Saat hälytykset tästä lähtien.",
+        f"✅ Lisätty: <b>{city}</b>\n"
+        f"📍 Kaikki tilauksesi: {', '.join(cities)}",
         parse_mode="HTML",
     )
-    logger.info("New subscriber %s → %s", chat_id, city)
+    logger.info("Subscriber %s added city %s", chat_id, city)
+
+
+async def cmd_removecity(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not ctx.args:
+        await update.message.reply_text(
+            "Anna kaupungin nimi: <code>/removecity Tampere</code>",
+            parse_mode="HTML",
+        )
+        return
+    city = " ".join(ctx.args).strip().capitalize()
+    chat_id = update.effective_chat.id
+    removed = storage.unsubscribe_city(chat_id, city)
+    if removed:
+        cities = storage.get_cities(chat_id)
+        remaining = f"📍 Jäljellä: {', '.join(cities)}" if cities else "Et tilaa enää mitään."
+        await update.message.reply_text(f"🗑 Poistettu: <b>{city}</b>\n{remaining}", parse_mode="HTML")
+    else:
+        await update.message.reply_text(f"Et tilaa kaupunkia <b>{city}</b>.", parse_mode="HTML")
+
+
+async def cmd_mycities(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    cities = storage.get_cities(update.effective_chat.id)
+    if cities:
+        await update.message.reply_text(
+            "📍 <b>Tilauksesi:</b>\n" + "\n".join(f"• {c}" for c in cities),
+            parse_mode="HTML",
+        )
+    else:
+        await update.message.reply_text(
+            "Et tilaa mitään. Käytä /setcity lisätäksesi kaupunki."
+        )
+
+
+async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    removed = storage.unsubscribe_all(update.effective_chat.id)
+    if removed:
+        await update.message.reply_text("🔕 Kaikki tilaukset peruttu.")
+    else:
+        await update.message.reply_text("Et ole tilannut mitään.")
 
 
 async def cmd_setchannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Works both when posted IN a channel (channel_post) and in a DM/group (message)."""
-    # update.effective_chat is the channel when it's a channel_post
+    """Post /setchannel <City> IN the channel to register it (channel_post update)."""
     chat = update.effective_chat
     city = " ".join(ctx.args).strip().capitalize() if ctx.args else ""
     if not city:
@@ -234,31 +278,49 @@ async def cmd_setchannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
         )
         return
     storage.subscribe(chat.id, city, kind="channel")
+    cities = storage.get_cities(chat.id)
     await ctx.bot.send_message(
         chat.id,
-        f"✅ Kanava rekisteröity: <b>{city}</b>\n"
-        "Hälytykset lähetetään tähän kanavaan.",
+        f"✅ Lisätty: <b>{city}</b>\n"
+        f"📍 Kanavan kaupungit: {', '.join(cities)}",
         parse_mode="HTML",
     )
-    logger.info("Channel %s registered for %s", chat.id, city)
+    logger.info("Channel %s added city %s", chat.id, city)
 
 
-async def cmd_mycity(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    city = storage.get_city(update.effective_chat.id)
-    if city:
-        await update.message.reply_text(f"📍 Nykyinen kaupunkisi: <b>{city}</b>", parse_mode="HTML")
-    else:
-        await update.message.reply_text(
-            "Et ole tilannut. Käytä /setcity asettaaksesi kaupungin."
+async def cmd_removechannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    city = " ".join(ctx.args).strip().capitalize() if ctx.args else ""
+    if not city:
+        await ctx.bot.send_message(
+            chat.id,
+            "Anna kaupungin nimi: <code>/removechannel Tampere</code>",
+            parse_mode="HTML",
         )
-
-
-async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    removed = storage.unsubscribe(update.effective_chat.id)
+        return
+    removed = storage.unsubscribe_city(chat.id, city)
     if removed:
-        await update.message.reply_text("🔕 Tilaus peruttu.")
+        cities = storage.get_cities(chat.id)
+        remaining = f"📍 Jäljellä: {', '.join(cities)}" if cities else "Kanavalla ei enää kaupunkeja."
+        await ctx.bot.send_message(chat.id, f"🗑 Poistettu: <b>{city}</b>\n{remaining}", parse_mode="HTML")
     else:
-        await update.message.reply_text("Et ole tilannut mitään.")
+        await ctx.bot.send_message(chat.id, f"Kanavalla ei ole kaupunkia <b>{city}</b>.", parse_mode="HTML")
+
+
+async def cmd_channelcities(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    chat = update.effective_chat
+    cities = storage.get_cities(chat.id)
+    if cities:
+        await ctx.bot.send_message(
+            chat.id,
+            "📍 <b>Kanavan kaupungit:</b>\n" + "\n".join(f"• {c}" for c in cities),
+            parse_mode="HTML",
+        )
+    else:
+        await ctx.bot.send_message(
+            chat.id,
+            "Kanavalla ei ole kaupunkeja. Käytä /setchannel lisätäksesi.",
+        )
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -299,12 +361,16 @@ def main() -> None:
         .build()
     )
 
+    # Personal commands (DM)
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("setcity", cmd_setcity))
-    app.add_handler(CommandHandler("mycity", cmd_mycity))
+    app.add_handler(CommandHandler("removecity", cmd_removecity))
+    app.add_handler(CommandHandler("mycities", cmd_mycities))
     app.add_handler(CommandHandler("stop", cmd_stop))
-    # /setchannel works both in DMs/groups (message) and posted inside a channel (channel_post)
+    # Channel commands — filters.ALL to catch channel_post updates
     app.add_handler(CommandHandler("setchannel", cmd_setchannel, filters=filters.ALL))
+    app.add_handler(CommandHandler("removechannel", cmd_removechannel, filters=filters.ALL))
+    app.add_handler(CommandHandler("channelcities", cmd_channelcities, filters=filters.ALL))
 
     app.run_polling(drop_pending_updates=True)
 

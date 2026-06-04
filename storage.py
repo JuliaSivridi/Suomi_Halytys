@@ -26,17 +26,50 @@ def init_db() -> None:
                 created_at  TEXT NOT NULL
             )
         """)
+        # composite PK: one row per (chat_id, city) → multiple cities per subscriber
         db.execute("""
             CREATE TABLE IF NOT EXISTS subscribers (
-                chat_id     TEXT PRIMARY KEY,
+                chat_id     TEXT NOT NULL,
                 city        TEXT NOT NULL,
-                kind        TEXT NOT NULL DEFAULT 'personal',  -- 'personal' | 'channel'
-                created_at  TEXT NOT NULL
+                kind        TEXT NOT NULL DEFAULT 'personal',
+                created_at  TEXT NOT NULL,
+                PRIMARY KEY (chat_id, city)
             )
         """)
-        # Migrate old alerts table (no city column) transparently
-        cols = {r[1] for r in db.execute("PRAGMA table_info(alerts)")}
-        if "city" not in cols:
+        # Migrate old single-city subscribers table if needed
+        cols = {r[1] for r in db.execute("PRAGMA table_info(subscribers)")}
+        if "city" in cols:
+            # Check if old PK was just chat_id (no composite)
+            idx = db.execute(
+                "SELECT COUNT(*) FROM pragma_index_list('subscribers') "
+                "WHERE origin='pk'"
+            ).fetchone()[0]
+            # If only one PK column, migrate
+            try:
+                db.execute(
+                    "ALTER TABLE subscribers RENAME TO subscribers_old"
+                )
+                db.execute("""
+                    CREATE TABLE subscribers (
+                        chat_id     TEXT NOT NULL,
+                        city        TEXT NOT NULL,
+                        kind        TEXT NOT NULL DEFAULT 'personal',
+                        created_at  TEXT NOT NULL,
+                        PRIMARY KEY (chat_id, city)
+                    )
+                """)
+                db.execute(
+                    "INSERT OR IGNORE INTO subscribers SELECT chat_id, city, kind, created_at "
+                    "FROM subscribers_old"
+                )
+                db.execute("DROP TABLE subscribers_old")
+                logger.info("Migrated subscribers table to composite PK")
+            except Exception:
+                pass  # already migrated or new install
+
+        # Migrate alerts table (add city column if missing)
+        alert_cols = {r[1] for r in db.execute("PRAGMA table_info(alerts)")}
+        if "city" not in alert_cols:
             db.execute("ALTER TABLE alerts ADD COLUMN city TEXT NOT NULL DEFAULT ''")
         db.commit()
 
@@ -49,31 +82,40 @@ def subscribe(chat_id: str | int, city: str, kind: str = "personal") -> None:
         db.execute(
             """INSERT INTO subscribers (chat_id, city, kind, created_at)
                VALUES (?,?,?,?)
-               ON CONFLICT(chat_id) DO UPDATE SET city=excluded.city, kind=excluded.kind""",
+               ON CONFLICT(chat_id, city) DO UPDATE SET kind=excluded.kind""",
             (str(chat_id), city, kind, datetime.utcnow().isoformat()),
         )
         db.commit()
 
 
-def unsubscribe(chat_id: str | int) -> bool:
+def unsubscribe_city(chat_id: str | int, city: str) -> bool:
+    """Remove one city from a subscriber."""
+    city = city.strip().capitalize()
+    with _conn() as db:
+        cur = db.execute(
+            "DELETE FROM subscribers WHERE chat_id=? AND city=?",
+            (str(chat_id), city),
+        )
+        db.commit()
+    return cur.rowcount > 0
+
+
+def unsubscribe_all(chat_id: str | int) -> bool:
+    """Remove all cities for a subscriber."""
     with _conn() as db:
         cur = db.execute("DELETE FROM subscribers WHERE chat_id=?", (str(chat_id),))
         db.commit()
     return cur.rowcount > 0
 
 
-def get_city(chat_id: str | int) -> str | None:
+def get_cities(chat_id: str | int) -> list[str]:
+    """Return all cities for a subscriber."""
     with _conn() as db:
-        row = db.execute(
-            "SELECT city FROM subscribers WHERE chat_id=?", (str(chat_id),)
-        ).fetchone()
-    return row[0] if row else None
-
-
-def get_all_subscribers() -> list[tuple[str, str]]:
-    """Return list of (chat_id, city)."""
-    with _conn() as db:
-        return db.execute("SELECT chat_id, city FROM subscribers").fetchall()
+        rows = db.execute(
+            "SELECT city FROM subscribers WHERE chat_id=? ORDER BY city",
+            (str(chat_id),),
+        ).fetchall()
+    return [r[0] for r in rows]
 
 
 def get_unique_cities() -> list[str]:
