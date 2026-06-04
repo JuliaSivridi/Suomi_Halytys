@@ -1,22 +1,25 @@
 """
-Halytys — Telegram bot that monitors Finnish emergency alert sites
-and sends deduplicated notifications for Lappeenranta.
+Halytys — Finnish emergency alert Telegram bot.
+
+Personal use:  start the bot in DM, set your city, get notifications.
+Channel use:   add bot as admin, post /setchannel <City> in the channel.
 """
 import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from functools import partial
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from telegram import Bot
+from telegram import Bot, Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
 
 import config
 import storage
 from emojis import get_emoji
-from scrapers import SCRAPER_FALLBACK_CHAIN
+from scrapers import SCRAPER_FALLBACK_CHAIN, fetch_description
 from scrapers.base import Alert
-from scrapers.tilannehuone_fi import fetch_description
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -25,61 +28,54 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 _TIME_TOLERANCE_MIN = 5
-# Don't send events older than this on any cycle (catches bad date parses)
 _MAX_EVENT_AGE_H = 25
-# On first run (SILENT_FIRST_RUN=false), only send events from last N hours
 _STARTUP_SEND_AGE_H = 24
 
 
+# ── Time helpers ──────────────────────────────────────────────────────────────
+
+def _now_local() -> datetime:
+    """Current Finnish time (UTC+3 in summer). Events use Finnish local time."""
+    return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=3)
+
+
 def _norm_time(event_time: str) -> str:
-    """Round down to nearest 5 minutes for fuzzy deduplication."""
     try:
         dt = datetime.fromisoformat(event_time)
-        rounded = dt.replace(minute=(dt.minute // _TIME_TOLERANCE_MIN) * _TIME_TOLERANCE_MIN, second=0)
+        rounded = dt.replace(
+            minute=(dt.minute // _TIME_TOLERANCE_MIN) * _TIME_TOLERANCE_MIN, second=0
+        )
         return rounded.strftime("%Y-%m-%d %H:%M")
     except ValueError:
         return event_time
 
 
 def _norm_type(alert_type: str) -> str:
-    """Normalise alert type for deduplication: lowercase, strip punctuation/icons."""
     t = alert_type.lower()
-    t = re.sub(r"[^\w\s]", " ", t)   # punctuation → space
-    t = re.sub(r"\s+", " ", t).strip()
-    return t
-
-
-def _now_local() -> datetime:
-    """Current time in Finnish timezone (UTC+3 in summer, UTC+2 in winter).
-    Events from sites have no tz info and use Finnish local time.
-    Server runs UTC, so we offset by 3h to avoid filtering valid events as 'future'.
-    """
-    from datetime import timezone, timedelta as td
-    return datetime.now(timezone.utc).replace(tzinfo=None) + td(hours=3)
+    t = re.sub(r"[^\w\s]", " ", t)
+    return re.sub(r"\s+", " ", t).strip()
 
 
 def _is_future(event_time: str) -> bool:
-    """Return True if parsed event_time is more than 30 min in the future (bad parse)."""
     try:
-        dt = datetime.fromisoformat(event_time)
-        return dt > _now_local() + timedelta(minutes=30)
+        return datetime.fromisoformat(event_time) > _now_local() + timedelta(minutes=30)
     except ValueError:
         return False
 
 
-def _is_too_old(event_time: str) -> bool:
+def _is_too_old(event_time: str, max_hours: int = _MAX_EVENT_AGE_H) -> bool:
     try:
-        dt = datetime.fromisoformat(event_time)
-        return dt < _now_local() - timedelta(hours=_MAX_EVENT_AGE_H)
+        return datetime.fromisoformat(event_time) < _now_local() - timedelta(hours=max_hours)
     except ValueError:
         return False
 
+
+# ── Formatting ────────────────────────────────────────────────────────────────
 
 def _format_message(alert: Alert) -> str:
     emoji = get_emoji(alert.alert_type)
     title = alert.alert_type.capitalize()
     desc = alert.description.strip() if alert.description else ""
-    # Drop description if it's just icons/symbols or identical to type
     if desc and _norm_type(desc) != _norm_type(alert.alert_type) and re.search(r"\w", desc):
         title += f" — {desc.lower()}"
     try:
@@ -93,130 +89,198 @@ def _format_message(alert: Alert) -> str:
     return "\n".join(lines)
 
 
-async def _send_with_retry(bot: Bot, msg: str) -> bool:
-    """Send a message, retrying once on flood control. Returns True on success."""
-    for attempt in range(2):
+# ── Sending ───────────────────────────────────────────────────────────────────
+
+async def _send(bot: Bot, chat_id: str, msg: str) -> bool:
+    for _ in range(2):
         try:
-            await bot.send_message(chat_id=config.CHAT_ID, text=msg, parse_mode="HTML")
+            await bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
             return True
         except TelegramError as e:
             err = str(e)
             if "Flood control" in err or "429" in err:
-                # Parse retry_after from message "Retry in X seconds"
                 m = re.search(r"Retry in (\d+)", err)
                 wait = int(m.group(1)) + 2 if m else 30
-                logger.warning("Flood control, waiting %ds", wait)
+                logger.warning("Flood control for %s, waiting %ds", chat_id, wait)
                 await asyncio.sleep(wait)
+            elif "blocked" in err.lower() or "deactivated" in err.lower() or "chat not found" in err.lower():
+                logger.info("Removing unreachable subscriber %s", chat_id)
+                storage.unsubscribe(chat_id)
+                return False
             else:
-                logger.error("Failed to send message: %s", e)
+                logger.error("Send error to %s: %s", chat_id, e)
                 return False
     return False
 
 
-async def check_and_notify(bot: Bot, silent: bool = False, max_age_h: int | None = None) -> None:
-    """Scrape all sources, deduplicate, optionally send new alerts.
-    silent=True: marks everything as seen without sending (used on first run by default).
-    max_age_h: if set, skip events older than this many hours (used on startup send).
-    """
-    storage.purge_old()
-    new_count = 0
+# ── Core scrape+notify loop ───────────────────────────────────────────────────
 
-    alerts: list[Alert] = []
+async def _scrape_city(city: str) -> list[Alert]:
+    """Try scrapers in fallback order, return first non-empty result."""
+    loop = asyncio.get_event_loop()
     for source_name, scrape_fn in SCRAPER_FALLBACK_CHAIN:
         try:
-            alerts = await asyncio.get_event_loop().run_in_executor(None, scrape_fn)
+            alerts = await loop.run_in_executor(None, partial(scrape_fn, city=city))
         except Exception as exc:
-            logger.error("Scraper %s crashed: %s", source_name, exc)
+            logger.error("Scraper %s [%s] crashed: %s", source_name, city, exc)
             alerts = []
         if alerts:
-            logger.info("Using source: %s (%d alerts)", source_name, len(alerts))
-            break
-        logger.warning("%s returned 0 alerts, trying next source...", source_name)
+            logger.info("Source: %s [%s] → %d alerts", source_name, city, len(alerts))
+            return alerts
+        logger.warning("%s [%s]: 0 alerts, trying next", source_name, city)
+    return []
 
-    for alert in alerts:
-        if _is_future(alert.event_time):
-            continue
-        if _is_too_old(alert.event_time):
-            continue
-        if max_age_h is not None:
-            try:
-                dt = datetime.fromisoformat(alert.event_time)
-                if dt < _now_local() - timedelta(hours=max_age_h):
-                    continue
-            except ValueError:
-                pass
 
-        norm_time = _norm_time(alert.event_time)
-        norm_type = _norm_type(alert.alert_type)
-        alert_id = storage.make_id(norm_time, norm_type, alert.location)
+async def check_and_notify(bot: Bot, silent: bool = False,
+                            max_age_h: int | None = None) -> None:
+    storage.purge_old()
 
-        if storage.is_known(alert_id):
-            continue
+    cities = storage.get_unique_cities()
+    if not cities:
+        logger.debug("No subscribers yet.")
+        return
 
-        storage.save(
-            alert_id=alert_id,
-            event_time=alert.event_time,
-            alert_type=alert.alert_type,
-            location=alert.location,
-            description=alert.description,
-            source=alert.source,
-            raw_text=alert.raw_text,
+    for city in cities:
+        alerts = await _scrape_city(city)
+        subscribers = storage.get_subscribers_for_city(city)
+
+        for alert in alerts:
+            if _is_future(alert.event_time):
+                continue
+            if _is_too_old(alert.event_time):
+                continue
+            if max_age_h is not None and _is_too_old(alert.event_time, max_age_h):
+                continue
+
+            norm_time = _norm_time(alert.event_time)
+            norm_type = _norm_type(alert.alert_type)
+            alert_id = storage.make_id(norm_time, norm_type, alert.location)
+
+            if storage.is_known(alert_id):
+                continue
+
+            # Fetch detail page description if available
+            if alert.url and alert.source == "tilannehuone.fi" and not alert.description:
+                desc = await asyncio.get_event_loop().run_in_executor(
+                    None, fetch_description, alert.url
+                )
+                if desc:
+                    alert.description = desc
+
+            storage.save(
+                alert_id=alert_id,
+                city=city,
+                event_time=alert.event_time,
+                alert_type=alert.alert_type,
+                location=alert.location,
+                description=alert.description,
+                source=alert.source,
+                raw_text=alert.raw_text,
+            )
+
+            if silent:
+                continue
+
+            msg = _format_message(alert)
+            for chat_id in subscribers:
+                if await _send(bot, chat_id, msg):
+                    logger.info("[%s] Sent to %s: %s / %s",
+                                city, chat_id, alert.event_time, alert.alert_type)
+                await asyncio.sleep(0.5)
+
+
+# ── Command handlers ──────────────────────────────────────────────────────────
+
+async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "🚒 <b>Halytys-botti</b>\n\n"
+        "Lähetän hälytykset haluamaltasi paikkakunnalta.\n\n"
+        "Aseta kaupunkisi:\n"
+        "<code>/setcity Lappeenranta</code>\n\n"
+        "Lopeta tilaus:\n"
+        "<code>/stop</code>",
+        parse_mode="HTML",
+    )
+
+
+async def cmd_setcity(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    if not ctx.args:
+        await update.message.reply_text(
+            "Anna kaupungin nimi: <code>/setcity Lappeenranta</code>",
+            parse_mode="HTML",
+        )
+        return
+    city = " ".join(ctx.args).strip().capitalize()
+    chat_id = update.effective_chat.id
+    storage.subscribe(chat_id, city, kind="personal")
+    await update.message.reply_text(
+        f"✅ Tilaus asetettu: <b>{city}</b>\n"
+        "Saat hälytykset tästä lähtien.",
+        parse_mode="HTML",
+    )
+    logger.info("New subscriber %s → %s", chat_id, city)
+
+
+async def cmd_setchannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    """Post /setchannel <City> IN the channel (as channel post) to register it."""
+    chat = update.effective_chat
+    city = " ".join(ctx.args).strip().capitalize() if ctx.args else ""
+    if not city:
+        await ctx.bot.send_message(
+            chat.id,
+            "Anna kaupungin nimi: <code>/setchannel Lappeenranta</code>",
+            parse_mode="HTML",
+        )
+        return
+    storage.subscribe(chat.id, city, kind="channel")
+    await ctx.bot.send_message(
+        chat.id,
+        f"✅ Kanava rekisteröity: <b>{city}</b>\n"
+        "Hälytykset lähetetään tähän kanavaan.",
+        parse_mode="HTML",
+    )
+    logger.info("Channel %s registered for %s", chat.id, city)
+
+
+async def cmd_mycity(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    city = storage.get_city(update.effective_chat.id)
+    if city:
+        await update.message.reply_text(f"📍 Nykyinen kaupunkisi: <b>{city}</b>", parse_mode="HTML")
+    else:
+        await update.message.reply_text(
+            "Et ole tilannut. Käytä /setcity asettaaksesi kaupungin."
         )
 
-        # Fetch detail page description (address/notes) for tilannehuone events
-        if alert.url and alert.source == "tilannehuone.fi" and not alert.description:
-            desc = await asyncio.get_event_loop().run_in_executor(
-                None, fetch_description, alert.url
-            )
-            if desc:
-                alert.description = desc
-                # Update the stored description too
-                storage.update_description(alert_id, desc)
 
-        if silent:
-            continue
-
-        msg = _format_message(alert)
-        if await _send_with_retry(bot, msg):
-            new_count += 1
-            logger.info("Sent: %s / %s", alert.event_time, alert.alert_type)
-        await asyncio.sleep(1.5)
-
-    if new_count:
-        logger.info("Sent %d new alert(s) this cycle.", new_count)
+async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    removed = storage.unsubscribe(update.effective_chat.id)
+    if removed:
+        await update.message.reply_text("🔕 Tilaus peruttu.")
+    else:
+        await update.message.reply_text("Et ole tilannut mitään.")
 
 
-async def main() -> None:
-    if not config.BOT_TOKEN:
-        raise ValueError("BOT_TOKEN is not set in .env")
-    if not config.CHAT_ID:
-        raise ValueError("CHAT_ID is not set in .env")
+# ── Main ──────────────────────────────────────────────────────────────────────
 
+async def post_init(app: Application) -> None:
     storage.init_db()
-    bot = Bot(token=config.BOT_TOKEN)
-
+    bot = app.bot
     me = await bot.get_me()
-    logger.info("Bot started: @%s — checking every %d min", me.username, config.CHECK_INTERVAL)
+    logger.info("Bot started: @%s", me.username)
 
-    # First cycle: by default silently mark current events as seen to avoid startup spam.
-    # Set SILENT_FIRST_RUN=false in .env to send everything found on startup (for testing).
-    logger.info("First run: scanning existing alerts (silent=%s)...", config.SILENT_FIRST_RUN)
+    # Migrate: if CHAT_ID set in env, register it as a legacy channel subscriber
+    if config.CHAT_ID and not storage.get_city(config.CHAT_ID):
+        city = config.DEFAULT_CITY
+        storage.subscribe(config.CHAT_ID, city, kind="channel")
+        logger.info("Migrated legacy CHAT_ID %s → %s", config.CHAT_ID, city)
+
+    logger.info("First run: silent catch-up...")
     await check_and_notify(
         bot,
         silent=config.SILENT_FIRST_RUN,
         max_age_h=_STARTUP_SEND_AGE_H if not config.SILENT_FIRST_RUN else None,
     )
-    logger.info("First run complete. Future new alerts will be sent.")
-
-    await bot.send_message(
-        chat_id=config.CHAT_ID,
-        text=(
-            "🚒 <b>Halytys-botti käynnistetty!</b>\n"
-            f"Seuraan hälytyksiä Lappeenrannassa.\n"
-            f"Tarkistusväli: {config.CHECK_INTERVAL} min"
-        ),
-        parse_mode="HTML",
-    )
+    logger.info("First run done.")
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
@@ -227,14 +291,28 @@ async def main() -> None:
         next_run_time=datetime.now() + timedelta(minutes=config.CHECK_INTERVAL),
     )
     scheduler.start()
+    app.scheduler = scheduler  # keep reference for shutdown
 
-    try:
-        while True:
-            await asyncio.sleep(3600)
-    except (KeyboardInterrupt, SystemExit):
-        scheduler.shutdown()
-        logger.info("Bot stopped.")
+
+def main() -> None:
+    if not config.BOT_TOKEN:
+        raise ValueError("BOT_TOKEN is not set in .env")
+
+    app = (
+        Application.builder()
+        .token(config.BOT_TOKEN)
+        .post_init(post_init)
+        .build()
+    )
+
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("setcity", cmd_setcity))
+    app.add_handler(CommandHandler("setchannel", cmd_setchannel))
+    app.add_handler(CommandHandler("mycity", cmd_mycity))
+    app.add_handler(CommandHandler("stop", cmd_stop))
+
+    app.run_polling(drop_pending_updates=True)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

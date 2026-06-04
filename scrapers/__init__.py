@@ -1,11 +1,13 @@
 from .base import Alert
-from .tilannehuone_fi import scrape as scrape_tilannehuone_fi
-from .paloasema_fi import scrape as scrape_paloasema_fi
-from .hlytyslista_fi import scrape as scrape_hlytyslista_fi
+from .tilannehuone_fi import scrape as _scrape_tilannehuone
+from .paloasema_fi import scrape as _scrape_paloasema
+from .hlytyslista_fi import scrape as _scrape_hlytyslista
+from .tilannehuone_fi import fetch_description  # re-export for bot.py
 
-# Tried in order — next source is used only if the previous returned 0 alerts or failed
+# Each entry: (name, scrape_fn)
+# scrape_fn accepts city: str keyword argument
 SCRAPER_FALLBACK_CHAIN = [
-    ("tilannehuone.fi", scrape_tilannehuone_fi),
-    ("paloasema.fi",    scrape_paloasema_fi),
-    ("hälytyslista.fi", scrape_hlytyslista_fi),
+    ("tilannehuone.fi", _scrape_tilannehuone),
+    ("paloasema.fi",    _scrape_paloasema),
+    ("hälytyslista.fi", _scrape_hlytyslista),
 ]

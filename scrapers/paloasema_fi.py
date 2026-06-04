@@ -1,4 +1,4 @@
-"""Scraper for paloasema.fi/lappeenranta"""
+"""Scraper for paloasema.fi/<city> — fallback source."""
 import logging
 import re
 from bs4 import BeautifulSoup
@@ -6,18 +6,17 @@ from .base import Alert
 from .utils import get, parse_datetime, clean
 
 logger = logging.getLogger(__name__)
-URL = "https://www.paloasema.fi/lappeenranta"
 SOURCE = "paloasema.fi"
 
 
-def scrape() -> list[Alert]:
-    resp = get(URL)
+def scrape(city: str = "Lappeenranta") -> list[Alert]:
+    url = f"https://www.paloasema.fi/{city.lower()}"
+    resp = get(url)
     if not resp:
         return []
     soup = BeautifulSoup(resp.text, "lxml")
     alerts: list[Alert] = []
 
-    # Site uses <ul><li><a> structure with SVG icons, location, type, time
     for item in soup.select("ul li, .alert-list li, .incidents li"):
         raw = clean(item.get_text(" | ", strip=True))
         if not raw or not re.search(r"\d{1,2}:\d{2}", raw):
@@ -26,10 +25,9 @@ def scrape() -> list[Alert]:
             continue
 
         parts = [p.strip() for p in raw.split("|") if p.strip()]
-
         date_str = ""
         time_str = ""
-        location = "Lappeenranta"
+        location = city
         alert_type = ""
         description = ""
 
@@ -47,7 +45,7 @@ def scrape() -> list[Alert]:
                     time_str = sub[1]
             elif re.match(r"^\d{1,2}:\d{2}", p):
                 time_str = p
-            elif "lappeenranta" in p.lower() or "villmanstrand" in p.lower():
+            elif city.lower() in p.lower():
                 location = p
             elif not alert_type:
                 alert_type = p
@@ -67,5 +65,5 @@ def scrape() -> list[Alert]:
             raw_text=raw,
         ))
 
-    logger.info("%s: %d alerts", SOURCE, len(alerts))
+    logger.info("%s [%s]: %d alerts", SOURCE, city, len(alerts))
     return alerts

@@ -4,14 +4,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+# Legacy: if set, this channel is auto-registered on first start with DEFAULT_CITY
 CHAT_ID = os.getenv("CHAT_ID", "")
+DEFAULT_CITY = os.getenv("DEFAULT_CITY", "Lappeenranta")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "5"))
 DB_PATH = os.getenv("DB_PATH", "alerts.db")
-# Set to false to send all found events on first run (useful for testing)
-SILENT_FIRST_RUN = os.getenv("SILENT_FIRST_RUN", "true").lower() != "false"
-
-# How many days to keep events
 RETENTION_DAYS = 7
+SILENT_FIRST_RUN = os.getenv("SILENT_FIRST_RUN", "true").lower() != "false"
 
 HEADERS = {
     "User-Agent": (
