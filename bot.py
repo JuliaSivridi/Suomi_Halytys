@@ -12,12 +12,12 @@ from functools import partial
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
 from telegram.error import TelegramError
 
 import config
 import storage
 from emojis import get_emoji
+from telegram.ext import Application, CommandHandler, ContextTypes, filters
 from scrapers import SCRAPER_FALLBACK_CHAIN, fetch_description
 from scrapers.base import Alert
 
@@ -222,7 +222,8 @@ async def cmd_setcity(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def cmd_setchannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Post /setchannel <City> IN the channel (as channel post) to register it."""
+    """Works both when posted IN a channel (channel_post) and in a DM/group (message)."""
+    # update.effective_chat is the channel when it's a channel_post
     chat = update.effective_chat
     city = " ".join(ctx.args).strip().capitalize() if ctx.args else ""
     if not city:
@@ -267,13 +268,6 @@ async def post_init(app: Application) -> None:
     bot = app.bot
     me = await bot.get_me()
     logger.info("Bot started: @%s", me.username)
-
-    # Migrate: if CHAT_ID set in env, register it as a legacy channel subscriber
-    if config.CHAT_ID and not storage.get_city(config.CHAT_ID):
-        city = config.DEFAULT_CITY
-        storage.subscribe(config.CHAT_ID, city, kind="channel")
-        logger.info("Migrated legacy CHAT_ID %s → %s", config.CHAT_ID, city)
-
     logger.info("First run: silent catch-up...")
     await check_and_notify(
         bot,
@@ -307,9 +301,10 @@ def main() -> None:
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("setcity", cmd_setcity))
-    app.add_handler(CommandHandler("setchannel", cmd_setchannel))
     app.add_handler(CommandHandler("mycity", cmd_mycity))
     app.add_handler(CommandHandler("stop", cmd_stop))
+    # /setchannel works both in DMs/groups (message) and posted inside a channel (channel_post)
+    app.add_handler(CommandHandler("setchannel", cmd_setchannel, filters=filters.ALL))
 
     app.run_polling(drop_pending_updates=True)
 

@@ -4,9 +4,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-# Legacy: if set, this channel is auto-registered on first start with DEFAULT_CITY
-CHAT_ID = os.getenv("CHAT_ID", "")
-DEFAULT_CITY = os.getenv("DEFAULT_CITY", "Lappeenranta")
 CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "5"))
 DB_PATH = os.getenv("DB_PATH", "alerts.db")
 RETENTION_DAYS = 7

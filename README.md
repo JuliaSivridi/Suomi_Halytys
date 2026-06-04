@@ -75,11 +75,6 @@ Edit `.env`:
 
 ```env
 BOT_TOKEN=your_telegram_bot_token
-
-# Optional: auto-register a legacy channel on first start
-CHAT_ID=@yourchannel
-DEFAULT_CITY=Lappeenranta
-
 CHECK_INTERVAL=5
 ```
 
@@ -111,8 +106,6 @@ The database is preserved. The bot silently catches up with current events on st
 | Variable | Default | Description |
 |---|---|---|
 | `BOT_TOKEN` | — | Telegram bot token (required) |
-| `CHAT_ID` | — | Legacy channel: auto-registered on first start |
-| `DEFAULT_CITY` | `Lappeenranta` | City used for the legacy `CHAT_ID` |
 | `CHECK_INTERVAL` | `5` | Minutes between checks |
 | `DB_PATH` | `alerts.db` | SQLite database path |
 | `SILENT_FIRST_RUN` | `true` | Set to `false` to send last 24 h of events on startup (testing) |
