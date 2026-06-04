@@ -266,9 +266,19 @@ async def cmd_stop(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Et ole tilannut mitään.")
 
 
+def _is_channel(update: Update) -> bool:
+    from telegram import Chat
+    return update.effective_chat.type == Chat.CHANNEL
+
+
+_NOT_A_CHANNEL = "Tämä komento toimii vain kanavassa. Kirjoita se suoraan kanavallesi."
+
+
 async def cmd_setchannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-    """Post /setchannel <City> IN the channel to register it (channel_post update)."""
     chat = update.effective_chat
+    if not _is_channel(update):
+        await ctx.bot.send_message(chat.id, _NOT_A_CHANNEL)
+        return
     city = " ".join(ctx.args).strip().capitalize() if ctx.args else ""
     if not city:
         await ctx.bot.send_message(
@@ -290,6 +300,9 @@ async def cmd_setchannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
 
 async def cmd_removechannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
+    if not _is_channel(update):
+        await ctx.bot.send_message(chat.id, _NOT_A_CHANNEL)
+        return
     city = " ".join(ctx.args).strip().capitalize() if ctx.args else ""
     if not city:
         await ctx.bot.send_message(
@@ -309,6 +322,9 @@ async def cmd_removechannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
 
 async def cmd_channelcities(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     chat = update.effective_chat
+    if not _is_channel(update):
+        await ctx.bot.send_message(chat.id, _NOT_A_CHANNEL)
+        return
     cities = storage.get_cities(chat.id)
     if cities:
         await ctx.bot.send_message(
