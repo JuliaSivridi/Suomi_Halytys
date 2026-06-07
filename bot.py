@@ -50,10 +50,29 @@ def _norm_time(event_time: str) -> str:
         return event_time
 
 
+# Scale qualifiers that differ across sources (tilannehuone omits them, paloasema includes them)
+_SCALE_WORDS = {"pieni", "keskisuuri", "suuri", "small", "medium", "large"}
+
+
 def _norm_type(alert_type: str) -> str:
     t = alert_type.lower()
     t = re.sub(r"[^\w\s]", " ", t)
-    return re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"\s+", " ", t).strip()
+    # Strip scale qualifiers so events from different sources deduplicate correctly
+    words = [w for w in t.split() if w not in _SCALE_WORDS]
+    return " ".join(words)
+
+
+def _is_bogus_type(alert_type: str) -> bool:
+    """Reject alert_types that are actually place names or otherwise malformed."""
+    t = alert_type.strip()
+    # Ends with colon → scraper picked up a city label row (e.g. "Taipalsaari:")
+    if t.endswith(":"):
+        return True
+    # Very short or empty
+    if len(t) < 3:
+        return True
+    return False
 
 
 def _is_future(event_time: str) -> bool:
@@ -145,6 +164,9 @@ async def check_and_notify(bot: Bot, silent: bool = False,
         subscribers = storage.get_subscribers_for_city(city)
 
         for alert in alerts:
+            if _is_bogus_type(alert.alert_type):
+                logger.debug("Skipping bogus alert_type %r [%s]", alert.alert_type, city)
+                continue
             if _is_future(alert.event_time):
                 continue
             if _is_too_old(alert.event_time):
