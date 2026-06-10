@@ -5,9 +5,11 @@ Personal use:  start the bot in DM, set your city, get notifications.
 Channel use:   add bot as admin, post /setchannel <City> in the channel.
 """
 import asyncio
+import html
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from functools import partial
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -35,8 +37,8 @@ _STARTUP_SEND_AGE_H = 24
 # ── Time helpers ──────────────────────────────────────────────────────────────
 
 def _now_local() -> datetime:
-    """Current Finnish time (UTC+3 in summer). Events use Finnish local time."""
-    return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=3)
+    """Current Finnish time (handles EET/EEST DST). Events use naive Finnish local time."""
+    return datetime.now(ZoneInfo("Europe/Helsinki")).replace(tzinfo=None)
 
 
 def _norm_time(event_time: str) -> str:
@@ -102,9 +104,10 @@ def _format_message(alert: Alert) -> str:
         time_str = dt.strftime("%d.%m.%Y %H:%M")
     except ValueError:
         time_str = alert.event_time
-    lines = [f"{emoji} <b>{title}</b>", f"📍 {alert.location}", f"🕐 {time_str}"]
+    # Scraped content is untrusted — escape it so parse_mode="HTML" can't break or be abused
+    lines = [f"{emoji} <b>{html.escape(title)}</b>", f"📍 {html.escape(alert.location)}", f"🕐 {time_str}"]
     if alert.url:
-        lines.append(f'🔗 <a href="{alert.url}">Lisätiedot</a>')
+        lines.append(f'🔗 <a href="{html.escape(alert.url, quote=True)}">Lisätiedot</a>')
     return "\n".join(lines)
 
 
@@ -242,7 +245,7 @@ async def cmd_setcity(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
     storage.subscribe(chat_id, city, kind="personal")
     cities = storage.get_cities(chat_id)
     await update.message.reply_text(
-        f"✅ Lisätty: <b>{city}</b>\n"
+        f"✅ Lisätty: <b>{html.escape(city)}</b>\n"
         f"📍 Kaikki tilauksesi: {', '.join(cities)}",
         parse_mode="HTML",
     )
@@ -262,9 +265,9 @@ async def cmd_removecity(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     if removed:
         cities = storage.get_cities(chat_id)
         remaining = f"📍 Jäljellä: {', '.join(cities)}" if cities else "Et tilaa enää mitään."
-        await update.message.reply_text(f"🗑 Poistettu: <b>{city}</b>\n{remaining}", parse_mode="HTML")
+        await update.message.reply_text(f"🗑 Poistettu: <b>{html.escape(city)}</b>\n{remaining}", parse_mode="HTML")
     else:
-        await update.message.reply_text(f"Et tilaa kaupunkia <b>{city}</b>.", parse_mode="HTML")
+        await update.message.reply_text(f"Et tilaa kaupunkia <b>{html.escape(city)}</b>.", parse_mode="HTML")
 
 
 async def cmd_mycities(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
@@ -313,7 +316,7 @@ async def cmd_setchannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None
     cities = storage.get_cities(chat.id)
     await ctx.bot.send_message(
         chat.id,
-        f"✅ Lisätty: <b>{city}</b>\n"
+        f"✅ Lisätty: <b>{html.escape(city)}</b>\n"
         f"📍 Kanavan kaupungit: {', '.join(cities)}",
         parse_mode="HTML",
     )
@@ -337,9 +340,9 @@ async def cmd_removechannel(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> N
     if removed:
         cities = storage.get_cities(chat.id)
         remaining = f"📍 Jäljellä: {', '.join(cities)}" if cities else "Kanavalla ei enää kaupunkeja."
-        await ctx.bot.send_message(chat.id, f"🗑 Poistettu: <b>{city}</b>\n{remaining}", parse_mode="HTML")
+        await ctx.bot.send_message(chat.id, f"🗑 Poistettu: <b>{html.escape(city)}</b>\n{remaining}", parse_mode="HTML")
     else:
-        await ctx.bot.send_message(chat.id, f"Kanavalla ei ole kaupunkia <b>{city}</b>.", parse_mode="HTML")
+        await ctx.bot.send_message(chat.id, f"Kanavalla ei ole kaupunkia <b>{html.escape(city)}</b>.", parse_mode="HTML")
 
 
 async def cmd_channelcities(update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
