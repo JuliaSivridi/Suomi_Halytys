@@ -32,12 +32,19 @@ def scrape(city: str = "Lappeenranta") -> list[Alert]:
         description = ""
 
         for p in parts:
-            if p.lower().startswith("klo"):
+            pl = p.lower()
+            if pl.startswith("klo"):
+                # The page lists history: "09.06.2026 | klo 12:28" or "Eilen | klo 13:37".
+                # "klo" only means "today" when no date part was seen — overwriting an
+                # already-parsed date here made every historical alert look like today's
+                # and re-sent the whole page as new.
                 time_str = p
-                date_str = "tänään"
-            elif p.lower().startswith("eilen"):
+                if not date_str:
+                    date_str = "tänään"
+            elif pl.startswith("eilen"):
                 date_str = "eilen"
-                time_str = p
+                if re.search(r"\d{1,2}:\d{2}", p):
+                    time_str = p
             elif re.match(r"^\d{1,2}\.\d{1,2}", p):
                 sub = p.split()
                 date_str = sub[0]
@@ -45,8 +52,10 @@ def scrape(city: str = "Lappeenranta") -> list[Alert]:
                     time_str = sub[1]
             elif re.match(r"^\d{1,2}:\d{2}", p):
                 time_str = p
-            elif city.lower() in p.lower():
-                location = p
+            elif city.lower() in pl:
+                # Strip the label colon ("Lappeenranta:") so the dedup id matches
+                # the same event coming from other sources
+                location = p.rstrip(":").strip()
             elif not alert_type:
                 alert_type = p
             else:
