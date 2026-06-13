@@ -32,6 +32,11 @@ logger = logging.getLogger(__name__)
 _TIME_TOLERANCE_MIN = 5
 _MAX_EVENT_AGE_H = 25
 _STARTUP_SEND_AGE_H = 24
+# Safety valve: more than this many *new* alerts for one city in a single cycle
+# is never real (a city doesn't have 8 simultaneous emergencies) — it means the
+# dedup DB was empty (container restart) or the scraper misfired. We absorb such
+# a batch silently (seed the DB, send nothing) so the channel is never spammed.
+_MAX_NEW_PER_CYCLE = 8
 
 
 # ── Time helpers ──────────────────────────────────────────────────────────────
@@ -166,6 +171,8 @@ async def check_and_notify(bot: Bot, silent: bool = False,
         alerts = await _scrape_city(city)
         subscribers = storage.get_subscribers_for_city(city)
 
+        # ── Pass 1: collect alerts that pass the filters and aren't known yet ──
+        new_alerts: list[tuple[Alert, str]] = []
         for alert in alerts:
             if _is_bogus_type(alert.alert_type):
                 logger.debug("Skipping bogus alert_type %r [%s]", alert.alert_type, city)
@@ -184,8 +191,24 @@ async def check_and_notify(bot: Bot, silent: bool = False,
             if storage.is_known(alert_id):
                 continue
 
-            # Fetch detail page description if available
-            if alert.url and alert.source == "tilannehuone.fi" and not alert.description:
+            new_alerts.append((alert, alert_id))
+
+        # Flood guard: an unusually large batch of "new" alerts is never real
+        # (paloasema.fi dumps the whole day's history, and a fresh dedup DB after
+        # a container restart makes all of it look new). Absorb it silently — seed
+        # the DB so it's marked known, but don't notify. Genuine traffic trickles
+        # in a few per cycle and is unaffected.
+        absorb = silent or len(new_alerts) > _MAX_NEW_PER_CYCLE
+        if not silent and len(new_alerts) > _MAX_NEW_PER_CYCLE:
+            logger.warning(
+                "[%s] %d new alerts in one cycle — absorbing silently "
+                "(likely a restart with an empty dedup DB or a scraper glitch)",
+                city, len(new_alerts),
+            )
+
+        for alert, alert_id in new_alerts:
+            # Fetch detail page description if available (only when we'll send)
+            if not absorb and alert.url and alert.source == "tilannehuone.fi" and not alert.description:
                 desc = await asyncio.get_event_loop().run_in_executor(
                     None, fetch_description, alert.url
                 )
@@ -203,7 +226,7 @@ async def check_and_notify(bot: Bot, silent: bool = False,
                 raw_text=alert.raw_text,
             )
 
-            if silent:
+            if absorb:
                 continue
 
             msg = _format_message(alert)
